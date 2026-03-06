@@ -3,6 +3,9 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use ahash::AHashMap;
+use sctk::data_device_manager::DataDeviceManagerState;
+use sctk::data_device_manager::data_device::DataDevice;
+use sctk::data_device_manager::data_offer::DragOffer;
 
 use sctk::reexports::calloop::LoopHandle;
 use sctk::reexports::client::backend::ObjectId;
@@ -115,6 +118,21 @@ pub struct WinitState {
     /// Whether we have dispatched events to the user thus we want to
     /// send `AboutToWait` and normally wakeup the user.
     pub dispatched_events: bool,
+
+    /// Whether the user initiated a wake up.
+    pub proxy_wake_up: bool,
+
+    /// Data device manager for DnD support.
+    pub data_device_manager: Option<DataDeviceManagerState>,
+
+    /// Active data devices (one per seat).
+    pub data_devices: AHashMap<ObjectId, DataDevice>,
+
+    /// The current drag offer during a DnD operation.
+    pub dnd_offer: Option<DragOffer>,
+
+    /// The window that the current DnD is targeting.
+    pub dnd_window: Option<WindowId>,
 }
 
 impl WinitState {
@@ -158,6 +176,18 @@ impl WinitState {
         let shm = Shm::bind(globals, queue_handle).map_err(WaylandError::Bind)?;
         let custom_cursor_pool = Arc::new(Mutex::new(SlotPool::new(2, &shm).unwrap()));
 
+        let data_device_manager = DataDeviceManagerState::bind(globals, queue_handle).ok();
+
+        // Create data devices for existing seats so we receive DnD events.
+        let data_devices = if let Some(ref ddm) = data_device_manager {
+            seat_state
+                .seats()
+                .map(|seat| (seat.id(), ddm.get_data_device(queue_handle, &seat)))
+                .collect()
+        } else {
+            AHashMap::default()
+        };
+
         Ok(Self {
             registry_state,
             compositor_state: Arc::new(compositor_state),
@@ -192,6 +222,12 @@ impl WinitState {
             loop_handle,
             // Make it true by default.
             dispatched_events: true,
+            proxy_wake_up: false,
+
+            data_device_manager,
+            data_devices,
+            dnd_offer: None,
+            dnd_window: None,
         })
     }
 
